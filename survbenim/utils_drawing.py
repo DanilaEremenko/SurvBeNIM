@@ -5,8 +5,7 @@ import numpy as np
 import torch.nn
 from matplotlib import patches
 from sklearn.preprocessing import MinMaxScaler
-
-from nam_esimators import BNAMImp1, BaselineNAM, BNAMImp2
+from survbenim.nam_esimators import BNAMImp1, BaselineNAM, BNAMImp2
 
 
 def draw_shape_functions(
