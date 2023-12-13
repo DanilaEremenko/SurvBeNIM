@@ -12,7 +12,7 @@ from sksurv.nonparametric import nelson_aalen_estimator, kaplan_meier_estimator
 from sksurv.util import Surv
 from core.cox_wrapper import CoxFairBaseline
 from core.drawing import draw_points_tsne, draw_surv_yo
-from metrics import mse_torch
+from survbenim.metrics import mse_torch
 from survlimepy.utils.neighbours_generator import NeighboursGenerator
 import numpy as np
 import pandas as pd
@@ -20,8 +20,8 @@ from sklearn.model_selection import ParameterGrid
 from sksurv.ensemble import RandomSurvivalForest
 from matplotlib import pyplot as plt
 from survbex.estimators import BeranModel
-from nam_esimators import BaselineNAM, BNAMImp1, BaselineImportancesMLP
-from utils_drawing import draw_shape_functions
+from survbenim.nam_esimators import BaselineNAM, BNAMImp1, BaselineImportancesMLP
+from survbenim.utils_drawing import draw_shape_functions
 
 
 class SamplesWeighter:
