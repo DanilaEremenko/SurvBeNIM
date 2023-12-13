@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Dict
 import torch
+from sklearn.metrics import r2_score
 from sksurv.functions import StepFunction
 from sksurv.metrics import concordance_index_censored
 from sksurv.util import Surv
@@ -83,6 +84,7 @@ def fit_grid_node(
 
     batch_size = 4
     best_cindex = 0
+    best_f1_r2 = 0
     best_file = str(save_dir.joinpath('best_model.pt'))
     for i in range(max_epoch):
         if not fit:
@@ -114,18 +116,30 @@ def fit_grid_node(
         )[0]
 
         loss_train = mse_sf_and_et(
-            y_true=train_y_ets,
-            sf_pred=pred_fn(xps=train_features), t_deltas=t_deltas_train
+            y_true=train_y_ets, sf_pred=bnam_train_f, t_deltas=t_deltas_train
         )
         loss_val = mse_sf_and_et(
-            y_true=val_times,
-            sf_pred=pred_fn(xps=val_features), t_deltas=t_deltas_val
+            y_true=val_times, sf_pred=bnam_val_f, t_deltas=t_deltas_val
+        )
+
+        train_uncensored = train_y_events == 1
+        r2_train = r2_score(
+            y_true=train_y_ets[train_uncensored].detach().numpy(),
+            y_pred=(t_deltas_train[train_uncensored] * bnam_train_f[train_uncensored][:, 1:])
+            .sum(axis=1).detach().numpy()
+        )
+        val_uncensored = val_events == 1
+        r2_val = r2_score(
+            y_true=val_times[val_uncensored].detach().numpy(),
+            y_pred=(t_deltas_val[val_uncensored] * bnam_val_f[val_uncensored][:, 1:])
+            .sum(axis=1).detach().numpy()
         )
 
         curr_cindex = (cindex_train + cindex_val) / 2
+        curr_f1_r2 = 2 * (r2_train * r2_val) / (r2_train + r2_val)
 
-        if curr_cindex > best_cindex:
-            best_cindex = curr_cindex
+        if curr_f1_r2 > best_f1_r2:
+            best_f1_r2 = curr_f1_r2
             print('saving new best state dict..')
             torch.save(obj=bnam_model.nam.state_dict(), f=best_file)
 
@@ -134,13 +148,20 @@ def fit_grid_node(
                 train_loss=float(loss_train),
                 val_loss=float(loss_val),
                 val_cindex=cindex_val,
-                train_cindex=cindex_train
+                train_cindex=cindex_train,
+                train_r2=r2_train,
+                val_r2=r2_val,
+                train_f1_r2=best_f1_r2,
+                val_f1_r2=best_f1_r2,
             )
         )
         logger.debug(f'{len(history)}:train loss           = {loss_train:.4f}')
         logger.debug(f'{len(history)}:val loss             = {loss_val:.4f}')
         logger.debug(f'{len(history)}:train cindex         = {cindex_train:.4f}')
         logger.debug(f'{len(history)}:val cindex           = {cindex_val:.4f}')
+        logger.debug(f'{len(history)}:train r2             = {r2_train:.4f}')
+        logger.debug(f'{len(history)}:val r2               = {r2_val:.4f}')
+        logger.debug(f'{len(history)}:f1 r2                = {curr_f1_r2:.4f}')
 
     bnam_model.nam.load_state_dict(state_dict=torch.load(best_file))
     bnam_model.nam.eval()
@@ -262,11 +283,11 @@ def explain_points_set(
             raise Exception(f"Unexpected claz = {nam_claz.__name__}")
 
         if len(history) != 0:
-            mnames = ['loss', 'cindex']
-            rename_m_dict = {'target': 'target', 'train': 'background', 'val': 'explainable points'}
-            fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(len(mnames) * 3, 5))
+            mnames = ['loss', 'cindex', 'r2', 'f1_r2']
+            rename_m_dict = {'train': 'train&background', 'val': 'test'}
+            fig, axes = plt.subplots(nrows=len(mnames), ncols=1, figsize=(len(mnames) * 3, 5))
             for ax, mname in zip(axes, mnames):
-                for key in ['val', 'train']:
+                for key in ['train', 'val']:
                     label_key = rename_m_dict[key]
                     ax.plot(
                         [metric_dict[f"{key}_{mname}"] for metric_dict in grid_res['history']],
@@ -279,16 +300,14 @@ def explain_points_set(
             plt.savefig(f"{grid_dir}/metrics_history.png")
             plt.clf()
 
-        fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(5, 2 * 3))
-        for ax, s, label in zip(axes, [bnam_dp_s[:5]], ['bbox', 'bnam']):
-            draw_surv_yo_w_ax(
-                time_points=bnam_model.unique_times_,
-                pred_surv=np.array([StepFunction(x=bnam_model.event_times_, y=sample) for sample in s]),
-                ax=ax,
-                draw_args=[dict()] * len(bnam_dp_s),
-                actual_et=[None] * len(bnam_dp_s)
-            )
-            ax.set_title(label)
+        draw_surv_yo_w_ax(
+            time_points=bnam_model.unique_times_,
+            pred_surv=np.array([StepFunction(x=bnam_model.event_times_, y=sample) for sample in bnam_dp_s[:5]]),
+            ax=plt.gca(),
+            draw_args=[dict()] * len(bnam_dp_s),
+            actual_et=[None] * len(bnam_dp_s)
+        )
+        plt.title('bnam')
         plt.tight_layout()
         plt.savefig(f"{grid_dir}/surv_functions.png")
         plt.clf()
@@ -328,15 +347,17 @@ def run_main_st_3(ds_dir: Path, nam_claz, torch_bnam_grid: ParameterGrid):
     else:
         categories_dict = {}
 
-    random_ids = np.linspace(0, len(test_events) - 1, min(10, len(test_events)), dtype=np.int_)
-    explain_points_set(
-        test_features=test_features.to_numpy()[random_ids],
-        test_events=test_events[random_ids],
-        test_times=test_times[random_ids],
+    random_test_ids = np.linspace(0, len(test_events) - 1, min(100, len(test_events)), dtype=np.int_)
+    random_train_ids = np.linspace(0, len(train_events) - 1, min(1000, len(train_events)), dtype=np.int_)
 
-        train_features=train_features,
-        train_events=train_events,
-        train_times=train_times,
+    explain_points_set(
+        test_features=test_features.to_numpy()[random_test_ids],
+        test_events=test_events[random_test_ids],
+        test_times=test_times[random_test_ids],
+
+        train_features=train_features.iloc[random_train_ids],
+        train_events=train_events[random_train_ids],
+        train_times=train_times[random_train_ids],
 
         nam_claz=nam_claz, torch_bnam_grid=torch_bnam_grid,
         categories_dict=categories_dict,
