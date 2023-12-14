@@ -27,7 +27,7 @@ def mse_sf_and_et(y_true, sf_pred, t_deltas):
 def fit_grid_node(
         nam_claz, nam_args: dict,
         train_features: pd.DataFrame, train_events: np.ndarray, train_times: np.ndarray,
-        val_features: np.ndarray, val_events: torch.Tensor, val_times: torch.Tensor,
+        val_features: pd.DataFrame, val_events: np.ndarray, val_times: np.ndarray,
         criterion, optimizer: str, optimizer_args: dict, mode: str,
         last_layer: str, max_epoch: int, save_dir: Path, fit=True
 ):
@@ -44,7 +44,7 @@ def fit_grid_node(
     train_y_events = torch.tensor(train_events)
     train_y_ets = torch.tensor(train_times, dtype=torch.float32)
 
-    val_features = torch.tensor(val_features, dtype=torch.float32)
+    val_features = torch.tensor(val_features.to_numpy(), dtype=torch.float32)
     val_events = torch.tensor(val_events)
     val_times = torch.tensor(val_times, dtype=torch.float32)
 
@@ -137,7 +137,7 @@ def fit_grid_node(
 
         curr_cindex = (cindex_train + cindex_val) / 2
         curr_f1_r2 = 2 * (r2_train * r2_val) / (r2_train + r2_val)
-
+        curr_f1_r2 = curr_f1_r2 if 0 <= r2_train <= 1 and 0 <= r2_val <= 1 else -1
         if curr_f1_r2 > best_f1_r2:
             best_f1_r2 = curr_f1_r2
             print('saving new best state dict..')
@@ -169,8 +169,8 @@ def fit_grid_node(
     return bnam_model, history
 
 
-def explain_points_set(
-        test_features: np.ndarray, test_events: bool, test_times: float,
+def fit_on_ds(
+        val_features: pd.DataFrame, val_events: np.ndarray, val_times: np.ndarray,
         train_features: pd.DataFrame, train_events: np.ndarray, train_times: np.ndarray,
         torch_bnam_grid: ParameterGrid, nam_claz,
         categories_dict: Dict[str, Dict[float, str]],
@@ -182,8 +182,8 @@ def explain_points_set(
     torch.set_default_device(device=device)
     draw_points_tsne(
         pt_groups=[
-            train_features,
-            test_features
+            train_features.to_numpy(),
+            val_features.to_numpy()
         ],
         names=[
             'train background',
@@ -213,7 +213,7 @@ def explain_points_set(
         bnam_model, history = fit_grid_node(
             nam_claz=nam_claz,
             train_features=train_features, train_events=train_events, train_times=train_times,
-            val_features=test_features, val_events=test_events, val_times=test_times,
+            val_features=val_features, val_events=val_events, val_times=val_times,
             **grid_args, save_dir=grid_dir, fit=True
         )
         bnam_grid_results.append(
@@ -232,7 +232,7 @@ def explain_points_set(
                     fp=fp
                 )
 
-        bnam_dp_s = bnam_model.predict_survival(test_features).detach().cpu().numpy()
+        bnam_dp_s = bnam_model.predict_survival(val_features).detach().cpu().numpy()
 
         with open(f'{grid_dir}/pred_points.json', 'w+') as fp:
             json.dump(
@@ -347,17 +347,20 @@ def run_main_st_3(ds_dir: Path, nam_claz, torch_bnam_grid: ParameterGrid):
     else:
         categories_dict = {}
 
-    random_test_ids = np.linspace(0, len(test_events) - 1, min(100, len(test_events)), dtype=np.int_)
-    random_train_ids = np.linspace(0, len(train_events) - 1, min(1000, len(train_events)), dtype=np.int_)
+    np.random.seed(42)
+    train_ids = np.linspace(0, len(train_events) - 1, min(1000, len(train_events)), dtype=np.int_)
+    # train_ids = np.random.randint(low=0, high=len(train_events) - 1, size=1000)
+    val_ids = np.linspace(0, len(test_events) - 1, min(1000, len(test_events)), dtype=np.int_)
+    # val_ids = np.random.randint(low=0, high=len(train_events) - 1, size=1000)
 
-    explain_points_set(
-        test_features=test_features.to_numpy()[random_test_ids],
-        test_events=test_events[random_test_ids],
-        test_times=test_times[random_test_ids],
+    fit_on_ds(
+        val_features=train_features.iloc[val_ids],
+        val_events=train_events[val_ids],
+        val_times=train_times[val_ids],
 
-        train_features=train_features.iloc[random_train_ids],
-        train_events=train_events[random_train_ids],
-        train_times=train_times[random_train_ids],
+        train_features=train_features.iloc[train_ids],
+        train_events=train_events[train_ids],
+        train_times=train_times[train_ids],
 
         nam_claz=nam_claz, torch_bnam_grid=torch_bnam_grid,
         categories_dict=categories_dict,
