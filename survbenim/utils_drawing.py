@@ -38,7 +38,7 @@ def draw_shape_functions(
 
     # BNIM normalization
     if isinstance(funcs, BNAMImp1):
-        max_divisor = max([fy.max() for fy in fys])
+        max_divisor = sum([fy.max() for fy in fys])
         fys = [fy / max_divisor for fy in fys]
 
     nrows = math.ceil(len(fnames) / max_cols)
