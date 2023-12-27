@@ -5,8 +5,7 @@ import numpy as np
 import torch.nn
 from matplotlib import patches
 from sklearn.preprocessing import MinMaxScaler
-
-from nam_esimators import BNAMImp1, BaselineNAM, BNAMImp2
+from survbenim.nam_esimators import BNAMImp1, BaselineNAM, BNAMImp2
 
 
 def draw_shape_functions(
@@ -39,7 +38,7 @@ def draw_shape_functions(
 
     # BNIM normalization
     if isinstance(funcs, BNAMImp1):
-        max_divisor = max([fy.max() for fy in fys])
+        max_divisor = sum([fy.max() for fy in fys])
         fys = [fy / max_divisor for fy in fys]
 
     nrows = math.ceil(len(fnames) / max_cols)

@@ -11,8 +11,8 @@ from sksurv.nonparametric import nelson_aalen_estimator, kaplan_meier_estimator
 from sksurv.util import Surv
 from core.cox_wrapper import CoxFairBaseline
 from core.drawing import draw_points_tsne, draw_surv_yo, draw_surv_yo_w_ax
-from metrics import mse_torch
-from nam_esimators import BNAMImp1, BNAMImp2, BaselineNAM, BaselineImportancesMLP
+from survbenim.metrics import mse_torch
+from survbenim.nam_esimators import BNAMImp1, BNAMImp2, BaselineNAM, BaselineImportancesMLP
 from survlimepy.utils.neighbours_generator import NeighboursGenerator
 import numpy as np
 import pandas as pd
@@ -20,7 +20,7 @@ from sklearn.model_selection import ParameterGrid
 from sksurv.ensemble import RandomSurvivalForest
 from matplotlib import pyplot as plt
 from survbex.estimators import BeranModel
-from utils_drawing import draw_shape_functions
+from survbenim.utils_drawing import draw_shape_functions
 
 
 class SamplesWeighter:
@@ -286,7 +286,7 @@ def explain_points_set(
             val_features=exp_points, val_events=exp_events, val_times=exp_times,
             target_features=all_neighbours, target_points=exp_points,
             bbox_target_s=bbox_neigh_s, bbox_val_s=bbox_val_s, bbox_train_s=bbox_train_s,
-            **grid_args, save_dir=grid_dir, fit=False
+            **grid_args, save_dir=grid_dir, fit=True
         )
         bnam_grid_results.append(
             dict(
