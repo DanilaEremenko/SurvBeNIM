@@ -180,7 +180,7 @@ def fit_grid_node(
         criterion: str, optimizer: str, optimizer_args: dict, mode: str,
         v_mode: str, max_epoch: int, radius: float,
         select_criterion: str,
-        bnam_model,
+        bnam_claz, bnam_args: dict,
         res_dir: Path, fit=True
 ):
     if criterion in ['mse', 'mse_torch']:
@@ -194,6 +194,8 @@ def fit_grid_node(
 
     train_y_events = torch.tensor(train_events)
     train_y_ets = torch.tensor(train_times)
+
+    bnam_model = bnam_claz(**bnam_args)
 
     bnam_model.fit(
         X=train_features.to_numpy(),
@@ -286,6 +288,13 @@ def fit_grid_node(
             )
             loss_target.backward()
             optimizer.step()
+
+        nam_exploded = torch.stack([torch.isnan(w).any() for w in bnam_model.nam.parameters()]).any()
+        # kernel_exploded = torch.stack([torch.isnan(w).any() for w in bnam_model.kernel_nn.parameters()]).any()
+        if nam_exploded:
+            print('nam exploded')
+            break
+
         bnam_train_f = pred_fn(xps=train_features)
         bnam_target_f = pred_fn(xps=target_features)
         bnam_val_f = pred_fn(xps=val_features)
@@ -376,7 +385,7 @@ def grid_args_to_str(grid_args):
 
 def explain_exp_point(exp_point: np.ndarray, exp_event: bool, exp_time: float, pred_surv_fn, cox_clusters,
                       train_features: pd.DataFrame, train_events: np.ndarray, train_times: np.ndarray,
-                      bnam_claz, bnam_args: dict, radius: float, param_grid: ParameterGrid,
+                      bnam_claz, radius: float, param_grid: ParameterGrid, fit: bool,
                       res_dir: Path):
     res_dir.mkdir(exist_ok=True, parents=True)
     torch_bnam_grid = param_grid
@@ -429,10 +438,10 @@ def explain_exp_point(exp_point: np.ndarray, exp_event: bool, exp_time: float, p
             bbox_val_s=bbox_neigh_val_s, val_features=neighbours_val,
             bbox_target_s=bbox_neigh_s, bbox_train_s=bbox_train_s,
             **grid_args,
-            radius=radius, bnam_model=bnam_claz(**bnam_args),
+            radius=radius, bnam_claz=bnam_claz,
             select_criterion=select_criterion,
             res_dir=grid_res_dir,
-            fit=True
+            fit=fit
         )
         bnam_grid_results.append(
             dict(
@@ -442,7 +451,7 @@ def explain_exp_point(exp_point: np.ndarray, exp_event: bool, exp_time: float, p
             )
         )
         grid_res = bnam_grid_results[-1]
-        bnam_model = bnam_claz(**bnam_args)
+        bnam_model = bnam_claz(**grid_args['bnam_args'])
         bnam_model.fit(train_features.to_numpy(), train_times, train_events)
         bnam_model.nam.load_state_dict(state_dict=torch.load(grid_res['model_path']))
         bnam_model.nam.eval()
@@ -465,7 +474,7 @@ def explain_exp_point(exp_point: np.ndarray, exp_event: bool, exp_time: float, p
 
     grid_res = bnam_grid_results[best_grid_i]
 
-    bnam_model = bnam_claz(**bnam_args)
+    bnam_model = bnam_claz(**grid_res['bnam_args'])
     bnam_model.fit(train_features.to_numpy(), train_times, train_events)
     bnam_model.nam.load_state_dict(state_dict=torch.load(grid_res['model_path']))
     bnam_model.nam.eval()
@@ -481,9 +490,9 @@ def run_main_st_1_nams(
         exp_dir: Path,
         bbox_name: str,
         bnam_claz,
-        bnam_args,
         test_ids: List[int],
         radius: float,
+        fit: bool,
         param_grid: ParameterGrid
 ):
     res_dir = exp_dir.joinpath(f"bbox={bbox_name},radius={radius}").joinpath(f'{bnam_claz.__name__.lower()}_st_1')
@@ -590,7 +599,8 @@ def run_main_st_1_nams(
             cox_clusters=cox_clusters, pred_surv_fn=pred_surv_fn,
             exp_point=exp_point[np.newaxis], exp_event=exp_event, exp_time=exp_time,
             train_features=train_features, train_times=train_times, train_events=train_events,
-            bnam_claz=bnam_claz, bnam_args=bnam_args, radius=radius,
+            bnam_claz=bnam_claz, radius=radius,
             param_grid=param_grid,
+            fit=fit,
             res_dir=res_dir.joinpath(f"pt={pt_i}")
         )

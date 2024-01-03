@@ -12,8 +12,8 @@ if __name__ == '__main__':
         test_ids=[cl_i * test_cl_size + pt_i for cl_i in range(0, cl_num) for pt_i in range(0, 10)],
         bbox_name='rf',
         bnam_claz=BNAMImp1,
-        bnam_args=dict(kernel_name='nn', kernel_width=1e-1, last_layer='relu', no_zero_fn='abs'),
         radius=0.2,
+        fit=True,
         param_grid=ParameterGrid(
             [
                 dict(
@@ -26,7 +26,10 @@ if __name__ == '__main__':
                         for weight_decay in [0]
                     ],
                     mode=['surv'],
-                    v_mode=['no_surv']
+                    v_mode=['no_surv'],
+                    bnam_args=[
+                        dict(kernel_name='nn', kernel_width=1e-1, last_layer='relu', no_zero_fn='abs')
+                    ]
                 )
             ]
         )
