@@ -12,8 +12,8 @@ if __name__ == '__main__':
         test_ids=[cl_i * test_cl_size + pt_i for cl_i in range(0, cl_num) for pt_i in range(0, 10)],
         bbox_name='rf',
         bnam_claz=BaselineNAM,
-        bnam_args=dict(last_layer='relu'),
         radius=0.2,
+        fit=True,
         param_grid=ParameterGrid(
             [
                 dict(
@@ -26,7 +26,11 @@ if __name__ == '__main__':
                         for weight_decay in [0]
                     ],
                     mode=['surv'],
-                    v_mode=['no_surv']
+                    v_mode=['no_surv'],
+                    bnam_args=[
+                        dict(last_layer='relu')
+                    ]
+
                 )
             ]
         )
