@@ -1,6 +1,10 @@
 import json
+import time
 from pathlib import Path
 from typing import List
+
+import sksurv
+from sklearn.cluster import KMeans
 from sksurv.linear_model import CoxPHSurvivalAnalysis
 from sksurv.metrics import concordance_index_censored
 from sksurv.nonparametric import nelson_aalen_estimator, kaplan_meier_estimator
@@ -11,9 +15,11 @@ import numpy as np
 import pandas as pd
 from sksurv.ensemble import RandomSurvivalForest
 from survbex.estimators import BeranModel
+from survshap import SurvivalModelExplainer
+from survshap import ModelSurvSHAP
 
 
-def explain_exp_point(exp_point: np.ndarray, exp_event: bool, exp_time: float, pred_surv_fn, cox_clusters,
+def explain_exp_point(model, exp_point: np.ndarray, exp_event: bool, exp_time: float, pred_surv_fn, cox_clusters,
                       train_features: pd.DataFrame, train_events: np.ndarray, train_times: np.ndarray,
                       solver_name: str,
                       radius: float,
@@ -27,6 +33,8 @@ def explain_exp_point(exp_point: np.ndarray, exp_event: bool, exp_time: float, p
         kernel_width=radius,
         random_state=42
     )
+
+    start_time = time.time()
 
     if solver_name == 'survlime':
         f_imps = explainer.explain_instance(
@@ -44,6 +52,66 @@ def explain_exp_point(exp_point: np.ndarray, exp_event: bool, exp_time: float, p
         explainer_neigh_s = np.array([s.y for s in explainer_neigh_s])
         explainer_dp_s = cox_model.predict_survival_function(X=exp_point, cox_coefs=f_imps)
         explainer_dp_s = np.array([s.y for s in explainer_dp_s])
+        bbox_neigh_s = explainer.opt_funcion_maker.bbox_neigh_s
+
+    elif solver_name == 'survshap':
+        surv_shap = SurvivalModelExplainer(
+            model=model,  # bbox,
+            data=train_features,  # x
+            y=Surv.from_arrays(event=train_events, time=train_times),  # y
+            # data=pd.DataFrame(exp_point, columns=train_features.keys()),  # x
+            # y=Surv.from_arrays(event=[exp_event], time=[exp_time]),
+            predict_survival_function=lambda model, X: pred_surv_fn(X)
+        )
+
+        exp_survshap = ModelSurvSHAP(random_state=42, max_shap_value_inputs=int(1e3))
+        exp_survshap.fit(
+            surv_shap,
+            new_observations=pd.DataFrame(exp_point, columns=train_features.keys()),
+            timestamps=np.array([exp_time])
+        )
+        f_imps = np.array(
+            [
+                imp[1]
+                for pt_exp in exp_survshap.individual_explanations
+                for imp in pt_exp.simplified_result.values
+            ]
+        )
+        explainer_neigh_s = None
+        explainer_dp_s = None
+        bbox_neigh_s = None
+
+    elif solver_name == 'survshap_km':
+        kmeans = KMeans(n_clusters=2)
+        kmeans.fit(train_features.to_numpy())
+        train_cl_ids = kmeans.predict(train_features.to_numpy())
+        exp_cl_id = kmeans.predict(exp_point)
+
+        surv_shap = SurvivalModelExplainer(
+            model=model,  # bbox,
+            data=train_features.iloc[train_cl_ids == exp_cl_id],  # x
+            y=Surv.from_arrays(event=train_events, time=train_times),  # y
+            # data=pd.DataFrame(exp_point, columns=train_features.keys()),  # x
+            # y=Surv.from_arrays(event=[exp_event], time=[exp_time]),
+            predict_survival_function=lambda model, X: pred_surv_fn(X)
+        )
+
+        exp_survshap = ModelSurvSHAP(random_state=42, max_shap_value_inputs=int(1e3))
+        exp_survshap.fit(
+            surv_shap,
+            new_observations=pd.DataFrame(exp_point, columns=train_features.keys()),
+            timestamps=np.array([exp_time])
+        )
+        f_imps = np.array(
+            [
+                imp[1]
+                for pt_exp in exp_survshap.individual_explanations
+                for imp in pt_exp.simplified_result.values
+            ]
+        )
+        explainer_neigh_s = None
+        explainer_dp_s = None
+        bbox_neigh_s = None
 
     elif solver_name == 'survbex':
         f_imps = explainer.explain_instance(
@@ -64,6 +132,7 @@ def explain_exp_point(exp_point: np.ndarray, exp_event: bool, exp_time: float, p
         beran_model.fit(X=train_features.to_numpy(), y_events=train_events, y_event_times=train_times, b=f_imps)
         explainer_neigh_s = beran_model.predict_survival_torch_optimized(explainer.opt_funcion_maker.neighbours)
         explainer_dp_s = beran_model.predict_survival_torch_optimized(exp_point)
+        bbox_neigh_s = explainer.opt_funcion_maker.bbox_neigh_s
 
     else:
         raise Exception(f'Undefined solver name = {solver_name}')
@@ -71,14 +140,17 @@ def explain_exp_point(exp_point: np.ndarray, exp_event: bool, exp_time: float, p
     bbox_dp_s = pred_surv_fn(exp_point)
     bbox_dp_s = np.array([s.y for s in bbox_dp_s])
 
+    full_time = time.time() - start_time
+
     with open(f'{res_dir}/res.json', 'w+') as fp:
         json.dump(
             obj=dict(
+                full_time=full_time,
                 importances=f_imps.tolist(),
-                bbox_neigh_s=explainer.opt_funcion_maker.bbox_neigh_s.tolist(),
-                bbox_dp_s=bbox_dp_s.tolist(),
-                explainer_neigh_s=explainer_neigh_s.tolist(),
-                explainer_dp_s=explainer_dp_s.tolist()
+                bbox_neigh_s=bbox_neigh_s.tolist() if bbox_neigh_s is not None else None,
+                bbox_dp_s=bbox_dp_s.tolist() if bbox_dp_s is not None else None,
+                explainer_neigh_s=explainer_neigh_s.tolist() if explainer_neigh_s is not None else None,
+                explainer_dp_s=explainer_dp_s.tolist() if explainer_dp_s is not None else None
             ),
             fp=fp
         )
@@ -193,6 +265,7 @@ def run_main_st_1_linears(
             test_times[test_ids]
     ):
         explain_exp_point(
+            model=model,
             cox_clusters=cox_clusters, pred_surv_fn=pred_surv_fn,
             exp_point=exp_point[np.newaxis], exp_event=exp_event, exp_time=exp_time,
             train_features=train_features, train_times=train_times, train_events=train_events,
