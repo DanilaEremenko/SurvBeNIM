@@ -3,8 +3,10 @@ import time
 from pathlib import Path
 from typing import List
 
+import shap
 import sksurv
 from sklearn.cluster import KMeans
+from sksurv.functions import StepFunction
 from sksurv.linear_model import CoxPHSurvivalAnalysis
 from sksurv.metrics import concordance_index_censored
 from sksurv.nonparametric import nelson_aalen_estimator, kaplan_meier_estimator
@@ -54,21 +56,55 @@ def explain_exp_point(model, exp_point: np.ndarray, exp_event: bool, exp_time: f
         explainer_dp_s = np.array([s.y for s in explainer_dp_s])
         bbox_neigh_s = explainer.opt_funcion_maker.bbox_neigh_s
 
+    elif solver_name == 'shap':
+        def pred_time(s_funcs: List[StepFunction]):
+            return np.array([np.sum(s.x * s.y) for s in s_funcs])
+
+        masker = shap.maskers.Independent(train_features)
+        explainer = shap.Explainer(
+            lambda x: pred_time(pred_surv_fn(x)),
+            masker=masker,
+            feature_names=train_features.keys()
+        )
+        shap_values = explainer(pd.DataFrame(exp_point, columns=train_features.keys()))
+        f_imps = np.abs(shap_values.values.flatten())
+        f_imps /= f_imps.sum()
+        explainer_neigh_s = None
+        explainer_dp_s = None
+        bbox_neigh_s = None
+
+    elif solver_name == 'shap (km)':
+        def pred_time(s_funcs: List[StepFunction]):
+            return np.array([np.sum(s.x * s.y) for s in s_funcs])
+
+        kmeans = KMeans(n_clusters=2)
+        kmeans.fit(train_features.to_numpy())
+        train_cl_ids = kmeans.predict(train_features.to_numpy())
+        exp_cl_id = kmeans.predict(exp_point)
+        masker = shap.maskers.Independent(train_features.iloc[train_cl_ids == exp_cl_id])
+        explainer = shap.Explainer(
+            lambda x: pred_time(pred_surv_fn(x)),
+            masker=masker,
+            feature_names=train_features.keys()
+        )
+        shap_values = explainer(pd.DataFrame(exp_point, columns=train_features.keys()))
+        f_imps = np.abs(shap_values.values.flatten())
+        f_imps /= f_imps.sum()
+        explainer_neigh_s = None
+        explainer_dp_s = None
+        bbox_neigh_s = None
+
     elif solver_name == 'survshap':
         surv_shap = SurvivalModelExplainer(
-            model=model,  # bbox,
-            data=train_features,  # x
-            y=Surv.from_arrays(event=train_events, time=train_times),  # y
-            # data=pd.DataFrame(exp_point, columns=train_features.keys()),  # x
-            # y=Surv.from_arrays(event=[exp_event], time=[exp_time]),
+            model=model,
+            data=train_features,
+            y=Surv.from_arrays(event=train_events, time=train_times),
             predict_survival_function=lambda model, X: pred_surv_fn(X)
         )
-
         exp_survshap = ModelSurvSHAP(random_state=42, max_shap_value_inputs=int(1e3))
         exp_survshap.fit(
             surv_shap,
-            new_observations=pd.DataFrame(exp_point, columns=train_features.keys()),
-            timestamps=np.array([exp_time])
+            new_observations=pd.DataFrame(exp_point, columns=train_features.keys())
         )
         f_imps = np.array(
             [
@@ -88,19 +124,16 @@ def explain_exp_point(model, exp_point: np.ndarray, exp_event: bool, exp_time: f
         exp_cl_id = kmeans.predict(exp_point)
 
         surv_shap = SurvivalModelExplainer(
-            model=model,  # bbox,
-            data=train_features.iloc[train_cl_ids == exp_cl_id],  # x
-            y=Surv.from_arrays(event=train_events, time=train_times),  # y
-            # data=pd.DataFrame(exp_point, columns=train_features.keys()),  # x
-            # y=Surv.from_arrays(event=[exp_event], time=[exp_time]),
+            model=model,
+            data=train_features.iloc[train_cl_ids == exp_cl_id],
+            y=Surv.from_arrays(event=train_events, time=train_times),
             predict_survival_function=lambda model, X: pred_surv_fn(X)
         )
 
         exp_survshap = ModelSurvSHAP(random_state=42, max_shap_value_inputs=int(1e3))
         exp_survshap.fit(
             surv_shap,
-            new_observations=pd.DataFrame(exp_point, columns=train_features.keys()),
-            timestamps=np.array([exp_time])
+            new_observations=pd.DataFrame(exp_point, columns=train_features.keys())
         )
         f_imps = np.array(
             [
