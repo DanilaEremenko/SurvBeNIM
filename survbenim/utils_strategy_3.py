@@ -17,11 +17,9 @@ from matplotlib import pyplot as plt
 from survbenim.utils_drawing import draw_shape_functions
 
 
-def mse_sf_and_et(y_true, sf_pred, t_deltas):
-    sf_pred = sf_pred[:, 1:]
-    assert t_deltas.shape == sf_pred.shape
-    y_pred = (t_deltas * sf_pred).sum(axis=1)
-    return torch.sqrt(((y_true - y_pred) ** 2).mean())
+def predict_time(sf_pred, unique_t_matrix):
+    assert unique_t_matrix.shape == sf_pred.shape
+    return (unique_t_matrix * sf_pred).sum(axis=1)
 
 
 def fit_grid_node(
@@ -32,7 +30,7 @@ def fit_grid_node(
         last_layer: str, max_epoch: int, save_dir: Path, fit=True
 ):
     if criterion in ['mse', 'mse_torch']:
-        criterion = mse_sf_and_et
+        criterion = torch.nn.MSELoss()
     else:
         raise Exception("Undefined criterion")
 
@@ -54,6 +52,9 @@ def fit_grid_node(
         y_event_times=train_y_ets.detach().cpu().numpy(),
         y_events=train_y_events.detach().cpu().numpy()
     )
+
+    train_unique_matrix = torch.ones((len(train_features), 1)) @ bnam_model.unique_times_[np.newaxis]
+    val_unique_matrx = torch.ones((len(val_features), 1)) @ bnam_model.unique_times_[np.newaxis]
 
     if optimizer == 'sgd':
         optimizer = torch.optim.SGD(params=bnam_model.nam.parameters(), **optimizer_args)
@@ -95,11 +96,11 @@ def fit_grid_node(
                 break
             optimizer.zero_grad()
 
-            loss_batch = criterion(
-                y_true=train_y_ets[batch_start:batch_start + batch_size],
+            y_batch_pred = predict_time(
                 sf_pred=pred_fn(xps=train_features[batch_start:batch_start + batch_size]),
-                t_deltas=t_deltas_train[batch_start:batch_start + batch_size]
+                unique_t_matrix=train_unique_matrix[batch_start:batch_start + batch_size]
             )
+            loss_batch = criterion(train_y_ets[batch_start:batch_start + batch_size], y_batch_pred)
             loss_batch.backward()
             optimizer.step()
 
@@ -115,12 +116,16 @@ def fit_grid_node(
             estimate=1 / np.clip(bnam_val_f.mean(axis=-1).detach().cpu().numpy(), a_min=1e-5, a_max=1.)
         )[0]
 
-        loss_train = mse_sf_and_et(
-            y_true=train_y_ets, sf_pred=bnam_train_f, t_deltas=t_deltas_train
-        )
-        loss_val = mse_sf_and_et(
-            y_true=val_times, sf_pred=bnam_val_f, t_deltas=t_deltas_val
-        )
+        train_pred_y_ets = predict_time(sf_pred=bnam_train_f, unique_t_matrix=train_unique_matrix)
+        loss_train = criterion(train_y_ets, train_pred_y_ets)
+
+        val_pred_y_ets = predict_time(sf_pred=bnam_train_f, unique_t_matrix=val_unique_matrx)
+        loss_val = criterion(val_times, val_pred_y_ets)
+
+        if hasattr(bnam_model, 'risk_score'):
+            logger.debug(f"risk_score range = [{bnam_model.risk_score.min():.2f}, {bnam_model.risk_score.max():.2f}]")
+        logger.debug(f"y_pred range     = [{train_pred_y_ets.min():.2f}, {train_pred_y_ets.max():.2f}]")
+        logger.debug(f"y_true range     = [{train_y_ets.min():.2f}, {train_y_ets.max():.2f}]")
 
         train_uncensored = train_y_events == 1
         r2_train = r2_score(
@@ -155,13 +160,13 @@ def fit_grid_node(
                 val_f1_r2=best_f1_r2,
             )
         )
-        logger.debug(f'{len(history)}:train loss           = {loss_train:.4f}')
-        logger.debug(f'{len(history)}:val loss             = {loss_val:.4f}')
-        logger.debug(f'{len(history)}:train cindex         = {cindex_train:.4f}')
-        logger.debug(f'{len(history)}:val cindex           = {cindex_val:.4f}')
-        logger.debug(f'{len(history)}:train r2             = {r2_train:.4f}')
-        logger.debug(f'{len(history)}:val r2               = {r2_val:.4f}')
-        logger.debug(f'{len(history)}:f1 r2                = {curr_f1_r2:.4f}')
+        # logger.debug(f'{len(history)}:train loss           = {loss_train:.4f}')
+        # logger.debug(f'{len(history)}:val loss             = {loss_val:.4f}')
+        logger.debug(f'{len(history)}:train cindex   = {cindex_train:.4f}')
+        logger.debug(f'{len(history)}:val cindex     = {cindex_val:.4f}')
+        logger.debug(f'{len(history)}:train r2       = {r2_train:.4f}')
+        logger.debug(f'{len(history)}:val r2         = {r2_val:.4f}')
+        # logger.debug(f'{len(history)}:f1 r2                = {curr_f1_r2:.4f}')
 
     bnam_model.nam.load_state_dict(state_dict=torch.load(best_file))
     bnam_model.nam.eval()
@@ -314,7 +319,7 @@ def fit_on_ds(
 
 
 def run_main_st_3(ds_dir: Path, nam_claz, torch_bnam_grid: ParameterGrid):
-    res_dir = ds_dir.joinpath(nam_claz.__name__.lower() + "_st3")
+    res_dir = ds_dir.joinpath(nam_claz.__name__.lower())
     res_dir.mkdir(exist_ok=True, parents=True)
     print(res_dir)
 
@@ -354,13 +359,13 @@ def run_main_st_3(ds_dir: Path, nam_claz, torch_bnam_grid: ParameterGrid):
     # val_ids = np.random.randint(low=0, high=len(train_events) - 1, size=1000)
 
     fit_on_ds(
-        val_features=train_features.iloc[val_ids],
-        val_events=train_events[val_ids],
-        val_times=train_times[val_ids],
+        val_features=test_features,
+        val_events=test_events,
+        val_times=test_times,
 
-        train_features=train_features.iloc[train_ids],
-        train_events=train_events[train_ids],
-        train_times=train_times[train_ids],
+        train_features=train_features,
+        train_events=train_events,
+        train_times=train_times,
 
         nam_claz=nam_claz, torch_bnam_grid=torch_bnam_grid,
         categories_dict=categories_dict,
