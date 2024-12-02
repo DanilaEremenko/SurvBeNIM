@@ -9,10 +9,10 @@ from core.cox_generator import CoxGenerator
 from core.drawing import draw_points_tsne
 
 
-def get_cox_data(coefs: np.ndarray, size: int):
+def get_cox_data(coefs: np.ndarray, size: int, censored_part: float):
     cox_generator = CoxGenerator(coefs=coefs)
     x_cox_train, x_cox_test, y_cox_train, y_cox_test = train_test_split(
-        *cox_generator.generate_data(size=cl_size, censored_part=0.2),
+        *cox_generator.generate_data(size=size, censored_part=censored_part),
         train_size=0.7
     )
 
@@ -39,11 +39,14 @@ cox_coefs_all = np.array(
 # )
 
 cl_size = 200
-
-res_dir = Path(f'bnam/cox_dataset_clnum={len(cox_coefs_all)}_fnum={len(cox_coefs_all[0])}_cl_size={cl_size}')
+censored_part = 0.2
+res_dir = Path(
+    f'bnam/cox_dataset_clnum={len(cox_coefs_all)}_fnum={len(cox_coefs_all[0])}_cl_size={cl_size}_hard_censored_part={censored_part:.2f}'
+)
 res_dir.mkdir(exist_ok=True, parents=True)
 
-cox_clusters = [get_cox_data(coefs=cox_coefs, size=cl_size) for cox_coefs in cox_coefs_all]
+cox_clusters = [get_cox_data(coefs=cox_coefs, size=cl_size, censored_part=censored_part)
+                for cox_coefs in cox_coefs_all]
 
 cox_clusters = [
     (

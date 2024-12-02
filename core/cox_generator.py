@@ -22,12 +22,15 @@ class CoxGenerator:
         self.coefs = coefs
 
     def generate_data(self, size: int, censored_part: float, l=1e-5, v=2):
-        assert 0 <= censored_part < 0.5
+        assert 0 <= censored_part < 1.0
         x = np.random.random((size, len(self.coefs)))
         event_times = (-math.log(0.5) / (l * np.exp(np.sum(self.coefs.T * x, axis=1)))) ** (1 / v)
         events = np.ones(len(event_times))
         censored_ids = np.random.choice(list(range(size)), int(size * censored_part))
         events[censored_ids] = 0
+        # cut_coefs = np.random.uniform(low=0.5, high=0.9, size=len(censored_ids))
+        cut_coefs = np.random.uniform(low=0.1, high=0.9, size=len(censored_ids))
+        event_times[censored_ids] *= cut_coefs
 
         return x, Surv.from_arrays(event=events, time=event_times)
 
